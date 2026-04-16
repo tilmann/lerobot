@@ -1,0 +1,133 @@
+lerobot-teleoperate \
+    --robot.type=so101_follower \
+    --robot.port=/dev/tty.usbmodem5A680098251 \
+    --robot.cameras="{gripper: {type: opencv, index_or_path: 1, fps: 30, width: 640, height: 480}, workarea: {type: opencv, index_or_path: 0, fps: 30, width: 640, height: 480}}" \
+    --display_data=true \
+    --robot.id=my_follower \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/tty.usbmodem5A680110261 \
+    --teleop.id=my_leader
+
+
+
+lerobot-record \
+  --robot.type=so101_follower \
+  --robot.port=/dev/tty.usbmodem5A680098251 \
+  --robot.id=my_follower \
+  --robot.cameras="{gripper: {type: opencv, index_or_path: 1, width: 640, height: 480, fps: 30}}" \
+  --display_data=true \
+  --dataset.repo_id=tilmannb/eval_task_j \
+  --dataset.single_task="Place the stone" \
+  --dataset.streaming_encoding=true \
+  --dataset.encoder_threads=2 \
+  --dataset.num_episodes=20 \
+  --dataset.episode_time_s=30 \
+  --policy.path=tilmannb/act_so101_task_placing_test
+
+
+  VIDEO_BACKEND=pyav lerobot-train \
+  --dataset.repo_id=tilmannb/task_j \
+  --dataset.video_backend=pyav \
+  --policy.type=act \
+  --steps=50000 \
+  --output_dir=outputs/train/act_task_j \
+  --job_name=act_task_j \
+  --policy.device=cuda \
+  --wandb.enable=false \
+  --policy.repo_id=tilmannb/act_so101_task_j
+
+
+lerobot-record \
+    --robot.type=so101_follower \
+    --robot.port=/dev/tty.usbmodem5A680098251 \
+    --robot.id=my_follower \
+    --robot.cameras="{gripper: {type: opencv, index_or_path: 1, fps: 30, width: 640, height: 480}, workarea: {type: opencv, index_or_path: 0, fps: 30, width: 640, height: 480}}" \
+    --teleop.type=so101_leader \
+    --teleop.port=/dev/tty.usbmodem5A680110261 \
+    --teleop.id=my_leader \
+    --display_data=true \
+    --dataset.repo_id=tilmannb/4inarow_slot1 \
+    --dataset.num_episodes=10 \
+    --dataset.episode_time_s=20 \
+    --dataset.single_task="Place disc in slot 1" \
+    --dataset.push_to_hub=false
+
+
+
+  VIDEO_BACKEND=pyav lerobot-train \
+  --dataset.repo_id=tilmannb/4inarow_slot1 \
+  --dataset.root=data/4inarow_slot1 \
+  --dataset.video_backend=pyav \
+  --policy.type=act \
+  --steps=100000 \
+  --output_dir=outputs/train/act_4inarow_slot1 \
+  --save_checkpoint=true \
+  --save_freq=10000 \
+  --job_name=act_4inarow_slot1 \
+  --policy.device=cuda \
+  --batch_size=16 \
+  --wandb.enable=true \
+  --policy.repo_id=tilmannb/act_4inarow_slot1
+
+lerobot-edit-dataset \
+    --repo_id tilmannb/task_slot_test \
+    --operation.type delete_episodes \
+    --operation.episode_indices "[4]"
+    --push_to_hub true
+
+
+lerobot-edit-dataset \
+    --repo_id tilmannb/task_slot_test \
+    --operation.type info \
+    --push_to_hub true
+
+
+    EVAL
+
+lerobot-record \
+    --robot.type=so101_follower \
+    --robot.port=/dev/tty.usbmodem5A680098251 \
+    --robot.id=my_follower \
+    --robot.cameras="{gripper: {type: opencv, index_or_path: 1, fps: 30, width: 640, height: 480}}" \
+    --policy.path=tilmannb/act_so101_task_slot_test \
+    --dataset.repo_id=tilmannb/eval_task_slot_test \
+    --dataset.single_task="Place disc in slot" \
+    --dataset.num_episodes=10 \
+    --dataset.episode_time_s=30 \
+    --dataset.streaming_encoding=true \
+    --dataset.encoder_threads=2 \
+    --display_data=true
+
+
+VIDEO_BACKEND=pyav lerobot-record \
+  --robot.type=so101_follower \
+  --robot.port=/dev/tty.usbmodem5A680098251 \
+  --robot.id=my_follower \
+  --robot.cameras="{gripper: {type: opencv, index_or_path: 1, fps: 30, width: 640, height: 480}, workarea: {type: opencv, index_or_path: 0, fps: 30, width: 640, height: 480}}" \
+  --display_data=true \
+  --dataset.repo_id=tilmannb/eval_4inarow_slot1 \
+  --dataset.num_episodes=10 \
+  --dataset.episode_time_s=20 \
+  --dataset.single_task="Place disc in slot 1" \
+  --dataset.push_to_hub=false \
+  --dataset.streaming_encoding=true \
+  --policy.path=tilmannb/act_4inarow_slot1
+
+
+  rm -rf /Users/tilmannb/.cache/huggingface/lerobot/tilmannb/eval_4inarow_slot1 && VIDEO_BACKEND=pyav lerobot-record \
+  --robot.type=so101_follower \
+  --robot.port=/dev/tty.usbmodem5A680098251 \
+  --robot.id=my_follower \
+  --robot.cameras="{gripper: {type: opencv, index_or_path: 1, fps: 30, width: 640, height: 480}, workarea: {type: opencv, index_or_path: 0, fps: 30, width: 640, height: 480}}" \
+  --display_data=false \
+  --dataset.repo_id=tilmannb/eval_4inarow_slot1 \
+  --dataset.num_episodes=10 \
+  --dataset.episode_time_s=20 \
+  --dataset.reset_time_s=15 \
+  --dataset.single_task="Place disc in slot 1" \
+  --dataset.push_to_hub=false \
+  --dataset.streaming_encoding=true \
+  --dataset.vcodec=auto \
+  --dataset.encoder_threads=1 \
+  --policy.device=mps \
+  --policy.path=tilmannb/act_4inarow_slot1
