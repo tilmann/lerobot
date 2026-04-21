@@ -28,6 +28,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
 
+from fourinarow_board import crop_board
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -42,9 +44,10 @@ IMG_SIZE = 224
 
 
 class GridDataset(Dataset):
-    def __init__(self, data_dir: str, transform=None):
+    def __init__(self, data_dir: str, transform=None, auto_crop_board: bool = False):
         self.data_dir = data_dir
         self.transform = transform
+        self.auto_crop_board = auto_crop_board
         self.samples: list[tuple[str, str]] = []
 
         for f in sorted(os.listdir(data_dir)):
@@ -66,6 +69,10 @@ class GridDataset(Dataset):
         img_path, label_path = self.samples[idx]
 
         img = cv2.imread(img_path)
+        if img is None:
+            raise FileNotFoundError(f"Could not read image: {img_path}")
+        if self.auto_crop_board:
+            img, _ = crop_board(img)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         if self.transform:
@@ -86,8 +93,9 @@ class GridDataset(Dataset):
 def make_model(device: str) -> nn.Module:
     """ResNet18 with a 3-class-per-cell head (42 cells x 3 = 126 outputs)."""
     model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-    model.fc = nn.Sequential(
-        nn.Linear(model.fc.in_features, 256),
+    in_features = model.fc.in_features
+    model._modules["fc"] = nn.Sequential(
+        nn.Linear(in_features, 256),
         nn.ReLU(),
         nn.Dropout(0.3),
         nn.Linear(256, ROWS * COLS * NUM_CLASSES),
@@ -103,6 +111,8 @@ def make_model(device: str) -> nn.Module:
 def train(args):
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Device: {device}")
+    if args.auto_crop_board:
+        print("Board auto-crop: enabled")
 
     transform = transforms.Compose([
         transforms.ToPILImage(),
@@ -122,7 +132,7 @@ def train(args):
                              std=[0.229, 0.224, 0.225]),
     ])
 
-    full_dataset = GridDataset(args.data, transform=transform)
+    full_dataset = GridDataset(args.data, transform=transform, auto_crop_board=args.auto_crop_board)
 
     if len(full_dataset) == 0:
         print("No samples found. Run label_grid.py first.")
@@ -137,7 +147,7 @@ def train(args):
     val_indices = indices[split:]
 
     train_set = torch.utils.data.Subset(full_dataset, train_indices)
-    val_dataset = GridDataset(args.data, transform=val_transform)
+    val_dataset = GridDataset(args.data, transform=val_transform, auto_crop_board=args.auto_crop_board)
     val_set = torch.utils.data.Subset(val_dataset, val_indices)
 
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=0)
@@ -220,5 +230,6 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--auto-crop-board", action="store_true")
     args = parser.parse_args()
     train(args)
