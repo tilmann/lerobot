@@ -28,7 +28,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision import models, transforms
 
-from fourinarow_board import crop_board
+from fourinarow_board import corners_to_warp_crop, crop_board
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -71,7 +71,12 @@ class GridDataset(Dataset):
         img = cv2.imread(img_path)
         if img is None:
             raise FileNotFoundError(f"Could not read image: {img_path}")
-        if self.auto_crop_board:
+        corners_path = img_path.replace(".png", "_corners.npy")
+        if os.path.exists(corners_path):
+            corners = np.load(corners_path)
+            if corners.shape == (4, 2):
+                img = corners_to_warp_crop(img, corners)
+        elif self.auto_crop_board:
             img, _ = crop_board(img)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
@@ -83,6 +88,24 @@ class GridDataset(Dataset):
         label = torch.from_numpy(label)
 
         return img, label
+
+
+def compute_class_weights(
+    samples: list[tuple[str, str]],
+    indices: list[int],
+) -> torch.Tensor:
+    counts = np.zeros(NUM_CLASSES, dtype=np.float64)
+    for idx in indices:
+        _, label_path = samples[idx]
+        label = np.load(label_path).astype(np.int64).flatten()
+        bincount = np.bincount(label, minlength=NUM_CLASSES).astype(np.float64)
+        counts += bincount
+
+    counts = np.maximum(counts, 1.0)
+    total = np.sum(counts)
+    weights = total / (NUM_CLASSES * counts)
+    weights = weights / np.mean(weights)
+    return torch.tensor(weights, dtype=torch.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +140,7 @@ def train(args):
     transform = transforms.Compose([
         transforms.ToPILImage(),
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
+        transforms.ColorJitter(brightness=0.4, contrast=0.5, saturation=0.3, hue=0.05),
         transforms.RandomAffine(degrees=3, translate=(0.05, 0.05)),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
@@ -156,7 +179,11 @@ def train(args):
     print(f"Train: {len(train_set)}, Val: {len(val_set)}")
 
     model = make_model(device)
-    criterion = nn.CrossEntropyLoss()
+    class_weights = None
+    if args.class_weighted:
+        class_weights = compute_class_weights(full_dataset.samples, train_indices).to(device)
+        print("Class weights (empty, black, white):", [round(float(x), 4) for x in class_weights])
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
@@ -231,5 +258,6 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--auto-crop-board", action="store_true")
+    parser.add_argument("--class-weighted", action="store_true")
     args = parser.parse_args()
     train(args)

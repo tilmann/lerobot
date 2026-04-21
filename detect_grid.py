@@ -8,7 +8,11 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 
-from fourinarow_board import BoardBBox, crop_board, draw_board_bbox
+from pathlib import Path
+
+from fourinarow_board import BoardBBox, corners_to_warp_crop, crop_board, draw_board_bbox, run_corner_calibration
+
+DEFAULT_CALIBRATION_PATH = Path("models/board_calibration.npy")
 
 CAMERA_INDEX = 0
 CAMERA_WIDTH = 640
@@ -55,10 +59,15 @@ def predict_board(
     device: str,
     *,
     auto_crop_board: bool = False,
+    calibration_corners: np.ndarray | None = None,
+    enforce_gravity: bool = False,
+    disc_bias: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, BoardBBox | None]:
     working_frame = frame
     board_bbox = None
-    if auto_crop_board:
+    if calibration_corners is not None:
+        working_frame = corners_to_warp_crop(frame, calibration_corners)
+    elif auto_crop_board:
         working_frame, board_bbox = crop_board(frame)
 
     rgb = cv2.cvtColor(working_frame, cv2.COLOR_BGR2RGB)
@@ -67,22 +76,27 @@ def predict_board(
     with torch.no_grad():
         logits = model(img)
         logits = logits.view(ROWS, COLS, NUM_CLASSES)
+        if disc_bias != 0.0:
+            logits[:, :, BLACK] += disc_bias
+            logits[:, :, WHITE] += disc_bias
         probs = torch.softmax(logits, dim=2).cpu().numpy()
 
     raw_board = np.argmax(probs, axis=2)
-    board = np.zeros((ROWS, COLS), dtype=int)
-    for col in range(COLS):
-        black_count = int(np.sum(raw_board[:, col] == BLACK))
-        white_count = int(np.sum(raw_board[:, col] == WHITE))
-        row = ROWS - 1
-        for _ in range(black_count):
-            if row >= 0:
-                board[row, col] = BLACK
-                row -= 1
-        for _ in range(white_count):
-            if row >= 0:
-                board[row, col] = WHITE
-                row -= 1
+    board = raw_board.copy()
+    if enforce_gravity:
+        board.fill(EMPTY)
+        for col in range(COLS):
+            black_count = int(np.sum(raw_board[:, col] == BLACK))
+            white_count = int(np.sum(raw_board[:, col] == WHITE))
+            row = ROWS - 1
+            for _ in range(black_count):
+                if row >= 0:
+                    board[row, col] = BLACK
+                    row -= 1
+            for _ in range(white_count):
+                if row >= 0:
+                    board[row, col] = WHITE
+                    row -= 1
 
     return board, probs, board_bbox
 
@@ -100,13 +114,28 @@ def print_board(board: np.ndarray) -> None:
     print()
 
 
+def draw_calibration_quad(frame: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    display = frame.copy()
+    pts = corners.reshape((-1, 1, 2)).astype(np.int32)
+    cv2.polylines(display, [pts], True, (0, 255, 0), 2)
+    for idx, (x, y) in enumerate(corners):
+        cv2.circle(display, (int(x), int(y)), 5, (0, 255, 0), -1)
+        cv2.putText(display, str(idx + 1), (int(x) + 6, int(y) - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+    return display
+
+
 def draw_overlay(
     frame: np.ndarray,
     board: np.ndarray,
     probs: np.ndarray,
     board_bbox: BoardBBox | None,
+    calibration_corners: np.ndarray | None = None,
 ) -> np.ndarray:
-    display = draw_board_bbox(frame, board_bbox)
+    if calibration_corners is not None:
+        display = draw_calibration_quad(frame, calibration_corners)
+    else:
+        display = draw_board_bbox(frame, board_bbox)
     cell = 22
     ox, oy = 10, 10
 
@@ -152,12 +181,20 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="models/grid_model.pt")
     parser.add_argument("--auto-crop-board", action="store_true")
+    parser.add_argument("--calibration", default=str(DEFAULT_CALIBRATION_PATH),
+                        help="Path to board calibration .npy file")
+    parser.add_argument("--calibrate", action="store_true",
+                        help="Run corner calibration on startup and save to --calibration path")
+    parser.add_argument("--enforce-gravity", action="store_true",
+                        help="Post-process predictions to enforce per-column gravity")
+    parser.add_argument("--disc-bias", type=float, default=0.0,
+                        help="Positive values make black/white easier to predict than empty")
+    parser.add_argument("--stable-frames", type=int, default=STABLE_FRAMES,
+                        help="Number of consecutive matching frames required before updating the board")
     args = parser.parse_args()
 
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Device: {device}")
-    if args.auto_crop_board:
-        print("Board auto-crop: enabled")
 
     print(f"Loading model from {args.model}...")
     model = load_model(args.model, device)
@@ -170,6 +207,29 @@ def main():
     if not cap.isOpened():
         print(f"Error: Cannot open camera {CAMERA_INDEX}")
         return
+
+    calibration_corners: np.ndarray | None = None
+    calibration_path = Path(args.calibration)
+
+    if args.calibrate:
+        print("Calibration mode: click the four board corners (UL, UR, LR, LL) then press c.")
+        ret, frame = cap.read()
+        if ret:
+            calibration_corners = run_corner_calibration(frame)
+            if calibration_corners is not None:
+                calibration_path.parent.mkdir(parents=True, exist_ok=True)
+                np.save(calibration_path, calibration_corners)
+                print(f"Calibration saved to {calibration_path}")
+            else:
+                print("Calibration cancelled.")
+    elif calibration_path.exists():
+        calibration_corners = np.load(calibration_path)
+        print(f"Loaded calibration from {calibration_path}")
+    elif args.auto_crop_board:
+        print("Board auto-crop: enabled (heuristic)")
+
+    if calibration_corners is not None:
+        print(f"Using corner-based board crop. Run with --calibrate to redo.")
 
     prev_board = np.zeros((ROWS, COLS), dtype=int)
     candidate_board = None
@@ -189,6 +249,9 @@ def main():
                 frame,
                 device,
                 auto_crop_board=args.auto_crop_board,
+                calibration_corners=calibration_corners,
+                enforce_gravity=args.enforce_gravity,
+                disc_bias=args.disc_bias,
             )
 
             if candidate_board is not None and np.array_equal(board, candidate_board):
@@ -197,7 +260,7 @@ def main():
                 candidate_board = board.copy()
                 stable_count = 1
 
-            if stable_count >= STABLE_FRAMES:
+            if stable_count >= args.stable_frames:
                 total_new = np.sum(board != EMPTY)
                 total_old = np.sum(prev_board != EMPTY)
                 if not np.array_equal(board, prev_board) and total_new >= total_old:
@@ -205,7 +268,7 @@ def main():
                     print("--- Board changed ---")
                     print_board(board)
 
-            display = draw_overlay(frame, board, probs, board_bbox)
+            display = draw_overlay(frame, board, probs, board_bbox, calibration_corners)
             cv2.imshow("Grid Detector", display)
 
             if cv2.waitKey(1) & 0xFF == ord("q"):

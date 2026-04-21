@@ -149,6 +149,103 @@ def detect_board_bbox(
     return bbox
 
 
+BOARD_CROP_W = 224
+BOARD_CROP_H = 192  # 7:6 aspect ratio
+
+_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+
+
+def apply_clahe(bgr: np.ndarray) -> np.ndarray:
+    """Apply CLAHE to the L channel of an LAB image to normalise contrast."""
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+    lab[:, :, 0] = _CLAHE.apply(lab[:, :, 0])
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+
+
+_CORNER_NAMES = ["upper left", "upper right", "lower right", "lower left"]
+
+
+def corners_to_warp_crop(
+    frame: np.ndarray,
+    corners: np.ndarray,
+    out_w: int = BOARD_CROP_W,
+    out_h: int = BOARD_CROP_H,
+) -> np.ndarray:
+    """Perspective-warp frame using 4 board corners to a normalised rectangle.
+
+    corners: (4, 2) array, order UL, UR, LR, LL (x, y)
+    """
+    src = corners.astype(np.float32)
+    dst = np.array(
+        [[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]],
+        dtype=np.float32,
+    )
+    matrix = cv2.getPerspectiveTransform(src, dst)
+    warped = cv2.warpPerspective(frame, matrix, (out_w, out_h))
+    return apply_clahe(warped)
+
+
+def run_corner_calibration(
+    frame: np.ndarray,
+    window_name: str = "Calibrate Board",
+) -> np.ndarray | None:
+    """Interactive 4-corner selection on a single frame.
+
+    Returns (4, 2) int32 corners in order UL, UR, LR, LL (x, y), or None if cancelled.
+    """
+    points: list[tuple[int, int]] = []
+
+    def _draw(img: np.ndarray) -> np.ndarray:
+        display = img.copy()
+        for idx, pt in enumerate(points):
+            cv2.circle(display, pt, 6, (0, 255, 0), -1)
+            cv2.circle(display, pt, 10, (0, 0, 0), 2)
+            cv2.putText(
+                display, str(idx + 1), (pt[0] + 8, pt[1] - 8),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2,
+            )
+        if len(points) >= 2:
+            for a, b in zip(points[:-1], points[1:]):
+                cv2.line(display, a, b, (0, 200, 255), 2)
+        if len(points) == 4:
+            cv2.line(display, points[-1], points[0], (0, 200, 255), 2)
+        next_label = _CORNER_NAMES[min(len(points), 3)] if len(points) < 4 else "done"
+        for row_idx, line in enumerate([
+            f"Click: {next_label}",
+            "u: undo  r: reset  c: confirm  ESC: cancel",
+        ]):
+            y = 28 + row_idx * 28
+            cv2.putText(display, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 3)
+            cv2.putText(display, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (30, 30, 30), 1)
+        return display
+
+    def _mouse(event, x, y, _flags, _param):
+        if event == cv2.EVENT_LBUTTONDOWN and len(points) < 4:
+            points.append((x, y))
+            cv2.imshow(window_name, _draw(frame))
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(window_name, _mouse)
+    cv2.imshow(window_name, _draw(frame))
+
+    while True:
+        key = cv2.waitKey(20) & 0xFF
+        if key == ord("u") and points:
+            points.pop()
+            cv2.imshow(window_name, _draw(frame))
+        elif key == ord("r"):
+            points.clear()
+            cv2.imshow(window_name, _draw(frame))
+        elif key == ord("c"):
+            if len(points) != 4:
+                continue
+            cv2.destroyWindow(window_name)
+            return np.array(points, dtype=np.int32)
+        elif key == 27:
+            cv2.destroyWindow(window_name)
+            return None
+
+
 def crop_board(frame: np.ndarray) -> tuple[np.ndarray, BoardBBox | None]:
     bbox = detect_board_bbox(frame)
     if bbox is None:
