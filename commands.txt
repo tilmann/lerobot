@@ -46,11 +46,13 @@ lerobot-record \
     --teleop.port=/dev/tty.usbmodem5A680110261 \
     --teleop.id=my_leader \
     --display_data=true \
-    --dataset.repo_id=tilmannb/4inarow_slot1 \
+    --dataset.root=data/tilmannb/4inarow_slot6 \
+    --dataset.repo_id=tilmannb/4inarow_slot6 \
     --dataset.num_episodes=10 \
     --dataset.episode_time_s=20 \
-    --dataset.single_task="Place disc in slot 1" \
-    --dataset.push_to_hub=false
+    --dataset.single_task="Place disc in slot 6" \
+    --dataset.push_to_hub=false \
+    --resume=true
 
 
 

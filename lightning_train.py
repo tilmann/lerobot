@@ -31,8 +31,8 @@ from lerobot.transforms import ImageTransformConfig, ImageTransformsConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-DEFAULT_SLOT = 5
-DATASET_REPO_ID = "tilmannb/4inarow_slot5"  # single-slot dataset target
+DEFAULT_SLOT = 6
+DATASET_REPO_ID = "tilmannb/4inarow_slot6"  # single-slot dataset target
 OUTPUT_BASE = Path("/teamspace/studios/this_studio/outputs")
 
 
@@ -101,6 +101,7 @@ def train_slot(slot: int, dataset_repo_id: str, image_transforms: ImageTransform
 
     dataset = DatasetConfig(
         repo_id=dataset_repo_id,
+        episodes=list(range(50, 100)),
         image_transforms=image_transforms,
         video_backend="pyav",
         revision="main",
